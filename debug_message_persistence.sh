@@ -1,0 +1,67 @@
+#!/bin/bash
+# Message Persistence Debug Script
+
+echo "🔍 MESSAGE PERSISTENCE DEBUG"
+echo "============================"
+
+echo ""
+echo "📊 Step 1: Database Connection Check"
+echo "-----------------------------------"
+curl -s http://localhost:5000/ | grep -o '"mongodb":"[^"]*"' || echo "❌ MongoDB status unknown"
+
+echo ""
+echo "📋 Step 2: Check Database Collections"
+echo "------------------------------------"
+# Try to access MongoDB directly to check collections
+echo "💡 Check your MongoDB Atlas dashboard:"
+echo "   - Go to: https://cloud.mongodb.com"
+echo "   - Select your cluster"
+echo "   - Click 'Collections'"
+echo "   - Verify 'messages' collection exists"
+
+echo ""
+echo "🧪 Step 3: Test Message Creation"
+echo "--------------------------------"
+echo "1. Open browser: http://localhost:5173/"
+echo "2. Login with any user"
+echo "3. Send a message to another user"
+echo "4. Check server logs for these messages:"
+echo "   ✅ Created new conversation: [ObjectId]"
+echo "   ✅ Message saved to MongoDB: [ObjectId]"
+echo "   📝 Updated conversation [ObjectId]"
+
+echo ""
+echo "🔍 Step 4: Manual Database Check"
+echo "--------------------------------"
+echo "After sending a message, check MongoDB Atlas:"
+echo "1. Collections > messages"
+echo "2. Look for your test message"
+echo "3. Verify conversation document exists"
+
+echo ""
+echo "🚨 Common Issues & Solutions:"
+echo "----------------------------"
+echo "❌ 'No conversation found' → ObjectId conversion error"
+echo "❌ 'Validation failed' → Message model validation error"
+echo "❌ 'Connection timeout' → MongoDB Atlas connection issue"
+echo "❌ Silent failure → Database save operation failing"
+
+echo ""
+echo "💡 Quick Fix Commands:"
+echo "---------------------"
+echo "# Restart server with fresh logs"
+echo "taskkill /f /im node.exe"
+echo "cd server && node server.js"
+
+echo ""
+echo "# Check if messages exist in database"
+echo "echo 'Check MongoDB Atlas dashboard manually'"
+
+echo ""
+echo "🎯 Expected Working Flow:"
+echo "1. User sends message"
+echo "2. Server creates/finds conversation"
+echo "3. Server saves message to MongoDB"
+echo "4. Server updates conversation metadata"
+echo "5. Message appears in real-time"
+echo "6. Message persists after logout/login"
