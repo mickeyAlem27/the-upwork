@@ -965,8 +965,55 @@ const setupSocketIO = (server) => {
           missedMessageCount: 0,
           timestamp: new Date()
         });
+      }
+    });
 
-        console.log(`📨 Broadcast notification count cleared for user ${userId}`);
+    // Handle message deletion
+    socket.on('delete_message', async (data) => {
+      try {
+        const { messageId, conversationId, deletedBy } = data;
+
+        // Validate required fields
+        if (!messageId || !conversationId || !deletedBy) {
+          socket.emit('message_error', {
+            error: 'Missing required fields for message deletion',
+            details: 'messageId, conversationId, and deletedBy are required'
+          });
+          return;
+        }
+
+        // For demo purposes, we'll simulate message deletion from database
+        // In a real implementation, you would:
+        // 1. Find the message by ID and verify ownership
+        // 2. Check if the user has permission to delete (sender or recipient)
+        // 3. Soft delete the message or mark it as deleted
+        // 4. Update conversation metadata
+
+        console.log(`🗑️ User ${deletedBy} is deleting message ${messageId} in conversation ${conversationId}`);
+
+        // Broadcast the deletion to all users in the conversation room
+        io.to(`conversation_${conversationId}`).emit('message_deleted', {
+          messageId,
+          conversationId,
+          deletedBy,
+          timestamp: new Date()
+        });
+
+        // Send confirmation to the user who deleted the message
+        socket.emit('message_deleted', {
+          messageId,
+          conversationId,
+          deletedBy,
+          timestamp: new Date(),
+          success: true
+        });
+
+      } catch (error) {
+        console.error('Error handling message deletion:', error);
+        socket.emit('message_error', {
+          error: 'Failed to delete message',
+          details: error.message
+        });
       }
     });
 
@@ -991,32 +1038,7 @@ const setupSocketIO = (server) => {
       }
     });
   });
-
-  // Clean up disconnected users periodically
-  setInterval(() => {
-    for (const [userId, userConnections] of connectedUsers.entries()) {
-      // Remove any stale connections
-      for (const socketId of userConnections) {
-        if (!io.sockets.sockets.get(socketId)) {
-          userConnections.delete(socketId);
-        }
-      }
-
-      // If user has no active connections, mark as offline
-      if (userConnections.size === 0) {
-        connectedUsers.delete(userId);
-        io.emit('user_offline', {
-          userId,
-          timestamp: new Date(),
-          isDemo: false
-        });
-      }
-    }
-  }, 60000);
 };
-
-
-
 // API endpoint to retrieve missed messages
 app.get('/api/missed-messages/:userId', async (req, res) => {
   try {
