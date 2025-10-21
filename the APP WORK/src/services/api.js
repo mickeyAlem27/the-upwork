@@ -290,3 +290,12 @@ export const jobsAPI = {
 // Export the base API instance for direct use
 export default api;
 
+// Export individual methods for specific HTTP verbs
+export const apiMethods = {
+  get: api.get.bind(api),
+  post: api.post.bind(api),
+  put: api.put.bind(api),
+  patch: api.patch.bind(api),
+  delete: api.delete.bind(api)
+};
+

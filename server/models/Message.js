@@ -124,13 +124,21 @@ messageSchema.statics.getConversationMessages = async function(conversationId, {
   const skip = (page - 1) * limit;
   
   const [messages, total] = await Promise.all([
-    this.find({ conversationId, isPartOfThread: true })
+    this.find({ 
+      conversationId, 
+      isPartOfThread: true,
+      isDeleted: { $ne: true }  // Filter out deleted messages
+    })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
       .populate('sender', 'firstName lastName photo role')
       .populate('recipient', 'firstName lastName photo role'),
-    this.countDocuments({ conversationId, isPartOfThread: true })
+    this.countDocuments({ 
+      conversationId, 
+      isPartOfThread: true,
+      isDeleted: { $ne: true }  // Filter out deleted messages
+    })
   ]);
   
   return {

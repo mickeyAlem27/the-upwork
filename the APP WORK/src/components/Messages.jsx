@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useContext, useMemo } from 'react';
+import React, { useState, useEffect, useContext, useMemo, useRef } from 'react';
 import { FiSend, FiBell, FiBellOff } from 'react-icons/fi';
 import SocketContext from '../context/SocketContext';
 import NotificationCenter from './NotificationCenter';
-import api from '../services/api';
+import api, { apiMethods } from '../services/api';
 
 const Messages = () => {
   const { socket, isConnected, isUserOnline } = useContext(SocketContext);
@@ -14,7 +14,6 @@ const Messages = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [globalNotifications, setGlobalNotifications] = useState([]);
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [unreadCounts, setUnreadCounts] = useState(new Map());
@@ -149,28 +148,6 @@ const Messages = () => {
     loadInitialData();
   }, []);
 
-  // Request notification permissions
-  const requestNotificationPermission = async () => {
-    if ('Notification' in window && Notification.permission === 'default') {
-      try {
-        const permission = await Notification.requestPermission();
-        setNotificationsEnabled(permission === 'granted');
-        if (permission === 'granted') {
-          showNotificationToast('Browser notifications enabled!', 'success');
-        } else {
-          showNotificationToast('Browser notifications denied', 'error');
-        }
-      } catch (error) {
-        console.error('Error requesting notification permission:', error);
-        showNotificationToast('Failed to enable notifications', 'error');
-      }
-    } else if ('Notification' in window && Notification.permission === 'granted') {
-      showNotificationToast('Notifications already enabled', 'info');
-    } else {
-      showNotificationToast('Browser notifications not supported', 'error');
-    }
-  };
-
   // Listen for user status updates with error handling
   useEffect(() => {
     if (!socket) return;
@@ -198,7 +175,7 @@ const Messages = () => {
         socket.off('user_status_update', handleUserStatusUpdate);
       }
     };
-  }, [socket, currentUser]);
+  }, [socket, currentUser, setUsers]);
 
   // Filter users based on search term and real-time online status (memoized for performance)
   // Exclude current user from the list since users can't message themselves
@@ -276,15 +253,7 @@ const Messages = () => {
           return newMissed;
         });
 
-        // Clear unread count for this user
-        const conversationId = [currentUser._id, userId].sort().join('_');
-        setUnreadCounts(prev => {
-          const newCounts = new Map(prev);
-          newCounts.delete(conversationId);
-          saveUnreadCountsToStorage(newCounts);
-          return newCounts;
-        });
-
+        // Note: Unread count clearing is handled by the global message handler when user views the conversation
         console.log('✅ Missed messages marked as read');
         showNotificationToast('Missed messages marked as read', 'success');
       }
@@ -313,13 +282,8 @@ const Messages = () => {
       const conversationId = [currentUser._id, user._id].sort().join('_');
       console.log('🔗 Conversation ID:', conversationId);
 
-      // Clear unread count for this conversation when user selects it
-      setUnreadCounts(prev => {
-        const newCounts = new Map(prev);
-        newCounts.delete(conversationId);
-        saveUnreadCountsToStorage(newCounts); // Update localStorage
-        return newCounts;
-      });
+      // Note: Unread count clearing is handled by the conversation-specific handler when messages are loaded
+      // The global handler manages unread count updates, not individual conversation selection
 
       // Join conversation room with proper error handling
       if (socket && isConnected && socket.connected) {
@@ -346,6 +310,16 @@ const Messages = () => {
     const unreadCount = unreadCounts.get(conversationId) || 0;
 
     if (unreadCount > 0) {
+      // Clear unread count for this conversation since user is selecting it
+      console.log('📬 Clearing unread count for conversation:', conversationId, '(user clicked)');
+      setUnreadCounts(prev => {
+        const newCounts = new Map(prev);
+        newCounts.delete(conversationId);
+        saveUnreadCountsToStorage(newCounts);
+        console.log(`✅ Cleared unread count for conversation ${conversationId} (user clicked)`);
+        return newCounts;
+      });
+
       // Show missed messages if any exist
       const userMissedMessages = missedMessages.get(user._id);
       if (userMissedMessages && userMissedMessages.length > 0) {
@@ -368,7 +342,7 @@ const Messages = () => {
       }
     }
 
-    // Then select the user normally
+    // Then select the user normally (this will trigger conversation loading)
     handleUserSelect(user);
   };
 
@@ -377,11 +351,45 @@ const Messages = () => {
     setShowUserProfile(false);
   };
 
-  // Handle back to user list (mobile)
-  const handleBackToUsers = () => {
-    setSelectedUser(null);
-    setShowUserProfile(false);
-    setMessages([]);
+  // Delete message function
+  const handleDeleteMessage = async (messageId, conversationId) => {
+    try {
+      console.log('🗑️ Attempting to delete message:', messageId, 'in conversation:', conversationId);
+      console.log('🔐 Current user ID:', currentUser._id);
+
+      const response = await apiMethods.delete(`/messages/${messageId}`);
+      console.log('✅ Delete response:', response);
+
+      if (response.data.success) {
+        // Remove message from local state
+        setMessages(prev => prev.filter(msg => msg.id !== messageId));
+
+        // Also remove from missed messages if it exists there
+        setMissedMessages(prev => {
+          const newMissed = new Map(prev);
+          for (const [userId, messages] of newMissed) {
+            newMissed.set(userId, messages.filter(msg => msg.id !== messageId));
+          }
+          return newMissed;
+        });
+
+        showNotificationToast('Message deleted successfully', 'success');
+
+        // Emit socket event for real-time deletion
+        if (socket && isConnected) {
+          socket.emit('delete_message', {
+            messageId,
+            conversationId,
+            deletedBy: currentUser._id
+          });
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error deleting message:', error);
+      console.error('❌ Error response:', error.response?.data);
+      console.error('❌ Error status:', error.response?.status);
+      showNotificationToast('Failed to delete message', 'error');
+    }
   };
 
   // Global Socket.IO message handling (works for all received messages)
@@ -420,24 +428,59 @@ const Messages = () => {
             : 'Someone';
 
           console.log('🔔 Showing notification for message from:', senderName);
-          showNotificationToast(`💬 ${senderName}: ${message.content?.substring(0, 80)}${message.content?.length > 80 ? '...' : ''}`, 'info');
+          showNotificationToast(`💬 ${senderName}: ${message.content?.substring(0, 80)}${message.content?.length > 80 ? '...' : ''}`, 'message');
         }
 
         // Update unread counts for this conversation
         if (isCurrentUserRecipient) {
-          // Current user is RECEIVER - increment unread count
+          // Current user is RECEIVER - increment unread count (only once per message)
           const currentConversationId = message.conversationId || [message.senderId, message.recipientId].sort().join('_');
+          const messageKey = `${message.senderId}-${message.recipientId}-${message.timestamp || message.id}`;
+
+          // Check if we've already processed this message for unread count
+          if (processedMessages.current.has(messageKey)) {
+            console.log('📬 Already processed this message for unread count, skipping');
+            return;
+          }
+
+          processedMessages.current.add(messageKey);
+
+          // Clean up old processed messages after 30 seconds
+          setTimeout(() => {
+            processedMessages.current.delete(messageKey);
+          }, 30000);
+
+          console.log('📬 Updating unread count for conversation:', currentConversationId);
+
           setUnreadCounts(prev => {
             const newCounts = new Map(prev);
             const currentCount = newCounts.get(currentConversationId) || 0;
-            newCounts.set(currentConversationId, currentCount + 1);
+            const newCount = currentCount + 1;
+            newCounts.set(currentConversationId, newCount);
+            console.log(`📬 Incremented unread count for conversation ${currentConversationId}: ${currentCount} -> ${newCount}`);
+
+            // Save to localStorage
             saveUnreadCountsToStorage(newCounts);
-            console.log(`📬 Incremented unread count for conversation ${currentConversationId}: ${currentCount + 1}`);
             return newCounts;
           });
         } else if (isCurrentUserSender) {
-          // Current user is SENDER - clear unread count for this conversation
+          // Current user is SENDER - clear unread count for this conversation (only once per message)
           const currentConversationId = message.conversationId || [message.senderId, message.recipientId].sort().join('_');
+          const messageKey = `${message.senderId}-${message.recipientId}-${message.timestamp || message.id}`;
+
+          // Check if we've already processed this message for clearing unread count
+          if (processedMessages.current.has(messageKey)) {
+            console.log('📬 Already processed this message for clearing unread count, skipping');
+            return;
+          }
+
+          processedMessages.current.add(messageKey);
+
+          // Clean up old processed messages after 30 seconds
+          setTimeout(() => {
+            processedMessages.current.delete(messageKey);
+          }, 30000);
+
           setUnreadCounts(prev => {
             const newCounts = new Map(prev);
             newCounts.delete(currentConversationId); // Clear unread count since user just sent message
@@ -453,64 +496,140 @@ const Messages = () => {
 
     socket.on('new_message', handleNewMessage);
 
-    // Listen for real-time missed message count updates (for offline users)
-    const handleMissedMessageCountUpdate = (data) => {
+    // Listen for message deletions
+    const handleMessageDeleted = (data) => {
       try {
-        // Only process updates for the current logged-in user
-        if (data.userId && data.userId === currentUser._id && data.missedMessageCount !== undefined) {
-          console.log('📬 GLOBAL: Received missed message count update for CURRENT USER:', data.userId, 'count:', data.missedMessageCount);
-
-          // Update unread count for the specific user
-          const conversationId = [currentUser._id, data.userId].sort().join('_');
-          setUnreadCounts(prev => {
-            const newCounts = new Map(prev);
-            if (data.missedMessageCount > 0) {
-              newCounts.set(conversationId, data.missedMessageCount);
-            } else {
-              newCounts.delete(conversationId);
+        console.log('🗑️ GLOBAL: Received message_deleted event:', data);
+        
+        // Remove the deleted message from the messages state if it's currently displayed
+        setMessages(prev => prev.filter(msg => msg.id !== data.messageId));
+        
+        // Also remove from missed messages if present
+        setMissedMessages(prev => {
+          const newMissed = new Map(prev);
+          let updated = false;
+          
+          // Iterate through all users' missed messages
+          for (const [userId, messages] of newMissed) {
+            const filteredMessages = messages.filter(msg => msg.id !== data.messageId);
+            if (filteredMessages.length !== messages.length) {
+              newMissed.set(userId, filteredMessages);
+              updated = true;
             }
-            saveUnreadCountsToStorage(newCounts);
-            return newCounts;
-          });
-        } else if (data.userId && data.userId !== currentUser._id) {
-          console.log('📬 GLOBAL: Ignoring missed message update for OTHER user:', data.userId);
-        }
+          }
+          
+          // If we updated any missed messages, show a notification
+          if (updated && data.deletedBy !== currentUser._id) {
+            showNotificationToast('A message was deleted', 'info');
+          }
+          
+          return newMissed;
+        });
+        
+        // Also remove from unread counts if needed
+        // We don't have a direct way to know which conversation this message belongs to,
+        // so we'll leave the unread counts as they are and let them update naturally
+        // when the user opens the conversation
+        
       } catch (error) {
-        console.error('Error updating missed message count:', error);
+        console.error('Error handling message deletion:', error);
       }
     };
 
-    socket.on('missed_message_count_updated', handleMissedMessageCountUpdate);
+    socket.on('message_deleted', handleMessageDeleted);
 
-    // Listen for direct message notifications (for receivers)
+    // Listen for message notifications (for missed messages when user was offline)
     const handleMessageNotification = (data) => {
       try {
-        console.log('📨 Received message notification:', data);
-
-        // Only process notifications for the current logged-in user
-        if (data.type === 'new_message' && data.senderId !== currentUser._id) {
-          // Additional check: ensure this notification is meant for current user
-          // The server should only send notifications to the recipient, but double-check
+        console.log('📬 Received message notification:', data);
+        
+        if (data.type === 'missed_message' && data.senderId && data.messageCount) {
           const senderName = data.senderName || 'Someone';
-          console.log('🔔 Showing notification for message from:', senderName, 'to user:', currentUser.firstName);
-
-          showNotificationToast(`💬 ${senderName}: ${data.messageContent?.substring(0, 80)}${data.messageContent?.length > 80 ? '...' : ''}`, 'info');
-        } else if (data.senderId === currentUser._id) {
-          console.log('📨 Ignoring notification for own message (sender)');
+          
+          // Show notification about missed messages
+          showNotificationToast(
+            `📬 ${data.messageCount} missed message${data.messageCount > 1 ? 's' : ''} from ${senderName}`,
+            'message'
+          );
+          
+          // Update unread count for this conversation
+          if (data.conversationId) {
+            setUnreadCounts(prev => {
+              const newCounts = new Map(prev);
+              const currentCount = newCounts.get(data.conversationId) || 0;
+              const newCount = currentCount + data.messageCount;
+              newCounts.set(data.conversationId, newCount);
+              console.log(`📬 Set missed message count for conversation ${data.conversationId}: ${newCount}`);
+              saveUnreadCountsToStorage(newCounts);
+              return newCounts;
+            });
+          }
         }
       } catch (error) {
         console.error('Error handling message notification:', error);
       }
     };
 
-    socket.on('new_message_notification', handleMessageNotification);
+    socket.on('message_notification', handleMessageNotification);
 
-    return () => {
-      if (socket) {
-        socket.off('new_message', handleNewMessage);
-        socket.off('missed_message_count_updated', handleMissedMessageCountUpdate);
-        socket.off('new_message_notification', handleMessageNotification);
+    // Listen for real-time missed message count updates (for offline users)
+const handleMissedMessageCountUpdate = (data) => {
+  try {
+    // Only process updates for the current logged-in user
+    if (data.userId && data.userId === currentUser._id && data.missedMessageCount !== undefined) {
+      console.log(
+        '📬 GLOBAL: Received missed message count update for CURRENT USER:',
+        data.userId,
+        'count:',
+        data.missedMessageCount
+      );
+
+      // Only update if this is a legitimate server update (not a duplicate of our own processing)
+      if (data.source === 'server' || !data.source) {
+        setUnreadCounts((prev) => {
+          const newCounts = new Map(prev);
+
+          // If detailed conversation counts are provided, use them
+          if (data.conversationCounts && typeof data.conversationCounts === 'object') {
+            // Update counts for each conversation
+            for (const [conversationId, count] of Object.entries(data.conversationCounts)) {
+              if (count > 0) {
+                newCounts.set(conversationId, count);
+                console.log(
+                  `📬 SERVER: Set unread count for conversation ${conversationId} to ${count}`
+                );
+              } else {
+                newCounts.delete(conversationId);
+                console.log(
+                  `📬 SERVER: Cleared unread count for conversation ${conversationId}`
+                );
+              }
+            }
+          }
+
+          saveUnreadCountsToStorage(newCounts);
+          return newCounts;
+        });
+      } else {
+        console.log('📬 CLIENT: Ignoring client-side update (already processed)');
       }
+    } else if (data.userId && data.userId !== currentUser._id) {
+      console.log('📬 GLOBAL: Ignoring missed message update for OTHER user:', data.userId);
+    }
+  } catch (error) {
+    console.error('Error updating missed message count:', error);
+  }
+};
+
+
+    socket.on('missed_message_count_updated', handleMissedMessageCountUpdate);
+
+    // Cleanup function
+    return () => {
+      socket.off('new_message', handleNewMessage);
+      socket.off('message_notification', handleMessageNotification);
+      socket.off('message_deleted', handleMessageDeleted);
+      socket.off('missed_message_count_updated', handleMissedMessageCountUpdate);
     };
   }, [socket, currentUser]);
 
@@ -530,10 +649,14 @@ const Messages = () => {
 
     const handleNewMessage = (message) => {
       try {
-        // Add message to current conversation if it's the one being viewed
+        console.log('💬 CONVERSATION HANDLER: Received new_message event:', message);
+
+        // Only add message to current conversation if it's the one being viewed
         if (message.conversationId === conversationId) {
           console.log('💬 Adding message to current conversation view');
           setMessages(prev => [...prev, message]);
+        } else {
+          console.log('💬 Ignoring message - not for current conversation:', conversationId, 'vs', message.conversationId);
         }
       } catch (error) {
         console.error('Error handling conversation message:', error);
@@ -548,16 +671,15 @@ const Messages = () => {
           console.log('✅ Setting messages for conversation:', conversationId);
           setMessages(data.messages);
 
-          // If messages were loaded and conversation was selected, mark as read
-          if (data.messages.length > 0) {
-            setUnreadCounts(prev => {
-              const newCounts = new Map(prev);
-              newCounts.delete(conversationId);
-              saveUnreadCountsToStorage(newCounts); // Also save to localStorage
-              console.log(`✅ Cleared unread count for conversation ${conversationId} (messages loaded)`);
-              return newCounts;
-            });
-          }
+          // Clear unread count for this conversation since user is now viewing it
+          console.log('✅ Clearing unread count for conversation:', conversationId, '(messages loaded)');
+          setUnreadCounts(prev => {
+            const newCounts = new Map(prev);
+            newCounts.delete(conversationId);
+            saveUnreadCountsToStorage(newCounts);
+            console.log(`✅ Cleared unread count for conversation ${conversationId} (messages loaded)`);
+            return newCounts;
+          });
         } else {
           console.log('❌ Message load failed - wrong conversation or invalid data');
         }
@@ -566,8 +688,43 @@ const Messages = () => {
       }
     };
 
+    // Handle message deletions in the current conversation
+    const handleConversationMessageDeleted = (data) => {
+      try {
+        console.log('🗑️ CONVERSATION HANDLER: Received message_deleted event:', data);
+        
+        // Remove the deleted message from the messages state
+        setMessages(prev => prev.filter(msg => msg.id !== data.messageId));
+        
+        // Also remove from missed messages if present
+        setMissedMessages(prev => {
+          const newMissed = new Map(prev);
+          let updated = false;
+          
+          // Iterate through all users' missed messages
+          for (const [userId, messages] of newMissed) {
+            const filteredMessages = messages.filter(msg => msg.id !== data.messageId);
+            if (filteredMessages.length !== messages.length) {
+              newMissed.set(userId, filteredMessages);
+              updated = true;
+            }
+          }
+          
+          return newMissed;
+        });
+        
+        // Show notification about the deletion
+        if (data.deletedBy !== currentUser._id) {
+          showNotificationToast('A message was deleted from this conversation', 'info');
+        }
+      } catch (error) {
+        console.error('Error handling conversation message deletion:', error);
+      }
+    };
+
     socket.on('new_message', handleNewMessage);
     socket.on('load_messages', handleLoadMessages);
+    socket.on('message_deleted', handleConversationMessageDeleted);
 
     return () => {
       try {
@@ -576,6 +733,7 @@ const Messages = () => {
         }
         socket.off('new_message', handleNewMessage);
         socket.off('load_messages', handleLoadMessages);
+        socket.off('message_deleted', handleConversationMessageDeleted);
       } catch (error) {
         console.error('Error cleaning up socket listeners:', error);
       }
@@ -610,6 +768,17 @@ const Messages = () => {
     try {
       socket.emit('send_message', messageData);
 
+      // Clear unread count for this conversation since user just sent a message
+      const senderConversationId = [currentUser._id, selectedUser._id].sort().join('_');
+      console.log('📤 Message sent - clearing unread count for conversation:', senderConversationId);
+      setUnreadCounts(prev => {
+        const newCounts = new Map(prev);
+        newCounts.delete(senderConversationId);
+        saveUnreadCountsToStorage(newCounts);
+        console.log(`✅ Cleared unread count for conversation ${senderConversationId} (message sent)`);
+        return newCounts;
+      });
+
       showNotificationToast('Message sent successfully!', 'success');
       setMessageInput('');
 
@@ -621,8 +790,33 @@ const Messages = () => {
     }
   };
 
+  // Track recent notifications to prevent duplicates from multiple event handlers
+  const recentNotifications = useRef(new Set());
+
+  // Track processed messages to prevent duplicate unread count updates
+  const processedMessages = useRef(new Set());
+
   // Notification system - both local and global
   const showNotificationToast = (message, type = 'info') => {
+    console.log('🔔 Creating notification:', { message, type });
+
+    // Create a unique key for this notification to prevent duplicates
+    const notificationKey = `${message}-${type}-${Date.now()}`;
+
+    // Check if we've already shown this notification recently (within 2 seconds)
+    if (recentNotifications.current.has(notificationKey)) {
+      console.log('🔔 Duplicate notification detected, skipping');
+      return;
+    }
+
+    // Add to recent notifications
+    recentNotifications.current.add(notificationKey);
+
+    // Clean up old notifications after 3 seconds
+    setTimeout(() => {
+      recentNotifications.current.delete(notificationKey);
+    }, 3000);
+
     let title = 'Notification';
     switch (type) {
       case 'success':
@@ -631,6 +825,9 @@ const Messages = () => {
       case 'error':
         title = 'Error';
         break;
+      case 'message':
+        title = 'New Message';
+        break;
       case 'info':
       default:
         title = 'New Message';
@@ -638,27 +835,112 @@ const Messages = () => {
     }
 
     const notification = {
-      id: Date.now(),
+      id: Date.now() + Math.random(), // More unique ID
       title,
       message,
       type,
       timestamp: new Date(),
-      read: false
+      read: false,
+      category: type === 'message' ? 'message' : 'system'
     };
 
-    // Add to global notifications (for NotificationCenter)
-    setGlobalNotifications(prev => [notification, ...prev.slice(0, 9)]); // Keep only latest 10
+    console.log('🔔 Adding notification to state:', notification);
+
+    // Prevent duplicate notifications - check if identical notification already exists
+    setGlobalNotifications(prev => {
+      const isDuplicate = prev.some(n =>
+        n.message === message &&
+        n.type === type &&
+        (Date.now() - n.timestamp.getTime()) < 10000 // Within last 10 seconds
+      );
+
+      if (isDuplicate) {
+        console.log('🔔 Duplicate notification detected, skipping');
+        return prev;
+      }
+
+      const newNotifications = [notification, ...prev.slice(0, 9)]; // Keep only latest 10
+      console.log('🔔 New notifications state:', newNotifications.length, 'notifications');
+      return newNotifications;
+    });
+
+    // Show browser notification for important message types (but not for duplicates)
+    if (type === 'message' || type === 'error') {
+      showBrowserNotification(
+        notification.title,
+        notification.message,
+        getNotificationIcon(type)
+      );
+    }
 
     // Auto-remove after 5 seconds
     setTimeout(() => {
+      console.log('🔔 Auto-removing notification:', notification.id);
       setGlobalNotifications(prev => prev.filter(n => n.id !== notification.id));
     }, 5000);
   };
 
   // Browser notification function
-  const showBrowserNotification = (title, body, icon) => {
-    if ('Notification' in window && Notification.permission === 'granted') {
-      new Notification(title, { body, icon });
+  const showBrowserNotification = async (title, body, icon) => {
+    try {
+      // Check if browser notifications are supported
+      if (!('Notification' in window)) {
+        console.log('🔔 Browser notifications not supported');
+        return;
+      }
+
+      // Check current permission status
+      let permission = Notification.permission;
+
+      // Request permission if not already granted or denied
+      if (permission === 'default') {
+        console.log('🔔 Requesting notification permission...');
+        try {
+          permission = await Notification.requestPermission();
+          console.log('🔔 Notification permission result:', permission);
+        } catch (error) {
+          console.error('🔔 Error requesting notification permission:', error);
+          return;
+        }
+      }
+
+      // Show notification if permission granted
+      if (permission === 'granted') {
+        console.log('🔔 Showing browser notification:', title);
+        const notification = new Notification(title, {
+          body,
+          icon,
+          tag: `message-notification-${type}`, // Unique tag per notification type
+          requireInteraction: false,
+          silent: false
+        });
+
+        // Auto-close notification after 5 seconds
+        setTimeout(() => {
+          notification.close();
+        }, 5000);
+
+        return notification;
+      } else {
+        console.log('🔔 Notification permission denied or not supported');
+      }
+    } catch (error) {
+      console.error('🔔 Error showing browser notification:', error);
+    }
+  };
+
+  // Get notification icon for browser notifications
+  const getNotificationIcon = (type) => {
+    switch (type) {
+      case 'success':
+        return '✅';
+      case 'error':
+        return '❌';
+      case 'message':
+        return '💬';
+      case 'info':
+      default:
+        return '🔔';
     }
   };
 
@@ -741,34 +1023,42 @@ const Messages = () => {
       {/* Global Notifications - Fixed position overlay (visible even when no user selected) */}
       {globalNotifications.length > 0 && (
         <div className="fixed top-4 right-4 z-50 space-y-3 max-w-sm pointer-events-auto">
-          {globalNotifications.slice(0, 3).map((notification) => ( // Show max 3 notifications
-            <div
-              key={notification.id}
-              className={`px-4 py-3 rounded-lg shadow-xl border-2 transition-all duration-300 transform animate-in slide-in-from-top-2 fade-in-0 ${
-                notification.type === 'success'
-                  ? 'bg-green-600/95 text-white border-green-400 shadow-green-500/50'
-                  : notification.type === 'error'
-                  ? 'bg-red-600/95 text-white border-red-400 shadow-red-500/50'
-                  : 'bg-blue-600/95 text-white border-blue-400 shadow-blue-500/50'
-              }`}
-            >
-              <div className="flex items-start space-x-3">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold truncate">{notification.title}</p>
-                  <p className="text-sm opacity-95 mt-1 break-words leading-relaxed">{notification.message}</p>
+          {globalNotifications.slice(0, 3).map((notification) => {
+            console.log('🔔 Rendering notification:', notification);
+            return (
+              <div
+                key={notification.id}
+                className={`px-4 py-3 rounded-lg shadow-xl border-2 transition-all duration-300 transform animate-in slide-in-from-top-2 fade-in-0 ${
+                  notification.type === 'success'
+                    ? 'bg-green-600/95 text-white border-green-400 shadow-green-500/50'
+                    : notification.type === 'error'
+                    ? 'bg-red-600/95 text-white border-red-400 shadow-red-500/50'
+                    : notification.type === 'message'
+                    ? 'bg-blue-600/95 text-white border-blue-400 shadow-blue-500/50'
+                    : 'bg-blue-600/95 text-white border-blue-400 shadow-blue-500/50'
+                }`}
+              >
+                <div className="flex items-start space-x-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold truncate">{notification.title}</p>
+                    <p className="text-sm opacity-95 mt-1 break-words leading-relaxed">{notification.message}</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      console.log('🔔 Dismissing notification:', notification.id);
+                      setGlobalNotifications(prev => prev.filter(n => n.id !== notification.id));
+                    }}
+                    className="text-white/80 hover:text-white transition-colors p-1 rounded-full hover:bg-white/10"
+                    title="Dismiss notification"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
                 </div>
-                <button
-                  onClick={() => setGlobalNotifications(prev => prev.filter(n => n.id !== notification.id))}
-                  className="text-white/80 hover:text-white transition-colors p-1 rounded-full hover:bg-white/10"
-                  title="Dismiss notification"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -1138,7 +1428,7 @@ const Messages = () => {
                               />
                             )}
                             <div
-                              className={`p-3 rounded-lg ${isFromCurrentUser ? 'bg-blue-600 text-white' : 'bg-gray-700 text-white'}`}
+                              className={`p-3 rounded-lg ${isFromCurrentUser ? 'bg-blue-600 text-white' : 'bg-gray-700 text-white'} group relative`}
                             >
                               {!isFromCurrentUser && (
                                 <p className="text-xs text-gray-300 mb-1">
@@ -1149,6 +1439,16 @@ const Messages = () => {
                               <p className={`text-xs mt-1 opacity-70 ${isFromCurrentUser ? 'text-blue-200' : 'text-gray-300'}`}>
                                 {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                               </p>
+                              {/* Delete button - visible on hover for both sender and receiver */}
+                              <button
+                                onClick={() => handleDeleteMessage(msg.id, msg.conversationId)}
+                                className={`absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-full hover:bg-red-500/20 ${isFromCurrentUser ? 'text-red-300' : 'text-red-400'}`}
+                                title={isFromCurrentUser ? 'Delete your message' : 'Delete message'}
+                              >
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              </button>
                             </div>
                             {isFromCurrentUser && (
                               <img

@@ -474,12 +474,25 @@ const setupSocketIO = (server) => {
 
     // Send missed message count update to the user themselves
     if (userMissedCount > 0) {
+      // Group missed messages by conversation for detailed count update
+      const userMissedMessages = missedMessages.get(socket.userId);
+      const conversationCounts = {};
+      
+      if (userMissedMessages) {
+        userMissedMessages.forEach(msg => {
+          if (msg.conversationId) {
+            conversationCounts[msg.conversationId] = (conversationCounts[msg.conversationId] || 0) + 1;
+          }
+        });
+      }
+
       socket.emit('missed_message_count_updated', {
         userId: socket.userId,
         missedMessageCount: userMissedCount,
+        conversationCounts: conversationCounts, // Send detailed breakdown by conversation
         timestamp: new Date()
       });
-      console.log(`📨 Sent missed_message_count_updated to user ${socket.userId} themselves`);
+      console.log(`📨 Sent missed_message_count_updated to user ${socket.userId} themselves with conversation breakdown`);
     }
 
     // Check for missed messages and send notifications
@@ -545,7 +558,8 @@ const setupSocketIO = (server) => {
             if (conversation) {
               const existingMessages = await Message.find({
                 conversationId: conversation._id,
-                isPartOfThread: true
+                isPartOfThread: true,
+                isDeleted: { $ne: true }  // Filter out deleted messages
               })
               .sort({ createdAt: -1 })
               .limit(50)
@@ -683,7 +697,8 @@ const setupSocketIO = (server) => {
         // Find all messages in this conversation thread
         const messages = await Message.find({
           participants: { $all: participants, $size: participants.length },
-          isPartOfThread: true
+          isPartOfThread: true,
+          isDeleted: { $ne: true }  // Filter out deleted messages
         })
         .sort({ createdAt: 1 })
         .limit(50) // Limit to last 50 messages
@@ -982,14 +997,39 @@ const setupSocketIO = (server) => {
           return;
         }
 
-        // For demo purposes, we'll simulate message deletion from database
-        // In a real implementation, you would:
-        // 1. Find the message by ID and verify ownership
-        // 2. Check if the user has permission to delete (sender or recipient)
-        // 3. Soft delete the message or mark it as deleted
-        // 4. Update conversation metadata
-
         console.log(`🗑️ User ${deletedBy} is deleting message ${messageId} in conversation ${conversationId}`);
+
+        // Actually delete the message from the database (soft delete)
+        const Message = require('./models/Message');
+        
+        // Find the message and verify user can delete it
+        const message = await Message.findById(messageId);
+        if (!message) {
+          socket.emit('message_error', {
+            error: 'Message not found',
+            details: `Message with ID ${messageId} does not exist`
+          });
+          return;
+        }
+
+        // Check if user has permission to delete (is sender or recipient)
+        const isSender = message.sender.toString() === deletedBy;
+        const isRecipient = message.recipient.toString() === deletedBy;
+        
+        if (!isSender && !isRecipient) {
+          socket.emit('message_error', {
+            error: 'Unauthorized',
+            details: 'You can only delete messages you sent or received'
+          });
+          return;
+        }
+
+        // Soft delete the message
+        message.isDeleted = true;
+        message.deletedAt = new Date();
+        await message.save();
+
+        console.log(`🗑️ Message ${messageId} marked as deleted in database`);
 
         // Broadcast the deletion to all users in the conversation room
         io.to(`conversation_${conversationId}`).emit('message_deleted', {
@@ -1051,7 +1091,8 @@ app.get('/api/missed-messages/:userId', async (req, res) => {
       const missedMsgs = await Message.find({
         recipient: new mongoose.Types.ObjectId(userId),
         isRead: false,
-        isPartOfThread: true
+        isPartOfThread: true,
+        isDeleted: { $ne: true }  // Filter out deleted messages
       })
       .sort({ createdAt: -1 })
       .limit(20)
@@ -1122,7 +1163,8 @@ app.post('/api/mark-missed-messages-read/:userId', async (req, res) => {
       const result = await Message.updateMany(
         {
           recipient: new mongoose.Types.ObjectId(userId),
-          isRead: false
+          isRead: false,
+          isDeleted: { $ne: true }  // Don't mark deleted messages as read
         },
         { isRead: true }
       );
