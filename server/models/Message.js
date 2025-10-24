@@ -44,6 +44,11 @@ const messageSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  conversationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Message',
+    default: null
+  },
   lastMessage: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Message',
@@ -52,6 +57,16 @@ const messageSchema = new mongoose.Schema({
   unreadCount: {
     type: Number,
     default: 0
+  },
+  
+  // Soft delete fields
+  isDeleted: {
+    type: Boolean,
+    default: false
+  },
+  deletedAt: {
+    type: Date,
+    default: null
   }
 }, {
   timestamps: true,
