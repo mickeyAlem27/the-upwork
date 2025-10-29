@@ -80,12 +80,15 @@ const CreatePost = () => {
       const res = await postsAPI.create(payload);
       console.log('Post created:', res);
 
+      // Show success message
+      alert('✅ Post created successfully!');
+
       // Reset form
       setPostText('');
       removeMedia(); // Reuse removeMedia to avoid duplicating reset logic
 
-      // Navigate to profile
-      navigate('/profile');
+      // Navigate to home page
+      navigate('/home');
     } catch (error) {
       console.error('Error creating post:', error);
       alert(`Failed to create post: ${error.message || 'Please try again.'}`);

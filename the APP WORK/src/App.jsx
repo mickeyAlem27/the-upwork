@@ -14,6 +14,7 @@ import Messages from './components/Messages';
 import MyJobs from './components/MyJobs';
 import CreateJob from './components/CreateJob';
 import Jobs from './components/Jobs';
+import Portfolio from './components/Portfolio';
 
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
@@ -124,6 +125,11 @@ function App() {
             <Route path="/biography/:userId" element={
               <ProtectedRoute>
                 <Biography />
+              </ProtectedRoute>
+            } />
+            <Route path="/portfolio/:userId" element={
+              <ProtectedRoute>
+                <Portfolio />
               </ProtectedRoute>
             } />
           </Routes>

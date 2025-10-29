@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api, { postsAPI } from '../services/api';
 import {
@@ -54,24 +54,46 @@ const Biography = () => {
 
   // Initialize form data when user data is available
   useEffect(() => {
-    if (user) {
-      setProfileData({
-        firstName: user.firstName || '',
-        lastName: user.lastName || '',
-        email: user.email || '',
-        phone: user.phone || '',
-        location: user.location || '',
-        company: user.company || '',
-        jobTitle: user.jobTitle || '',
-        bio: user.bio || '',
-        skills: Array.isArray(user.skills) ? user.skills : [],
-        photo: null,
-        photoPreview: user.photo ? `http://localhost:5000${user.photo}` : null
+    if (user && typeof user === 'object') {
+      // Only update if user data actually changed to prevent unnecessary re-renders
+      setProfileData(prev => {
+        const newPhotoPreview = user.photo
+          ? (user.photo.startsWith('http') ? user.photo : `http://localhost:5000${user.photo}`)
+          : null;
+
+        // Check if anything actually changed
+        if (
+          prev.firstName !== user.firstName ||
+          prev.lastName !== user.lastName ||
+          prev.email !== user.email ||
+          prev.phone !== user.phone ||
+          prev.location !== user.location ||
+          prev.company !== user.company ||
+          prev.jobTitle !== user.jobTitle ||
+          prev.bio !== user.bio ||
+          JSON.stringify(prev.skills) !== JSON.stringify(user.skills || []) ||
+          prev.photoPreview !== newPhotoPreview
+        ) {
+          return {
+            firstName: user.firstName || '',
+            lastName: user.lastName || '',
+            email: user.email || '',
+            phone: user.phone || '',
+            location: user.location || '',
+            company: user.company || '',
+            jobTitle: user.jobTitle || '',
+            bio: user.bio || '',
+            skills: Array.isArray(user.skills) ? user.skills : [],
+            photo: null,
+            photoPreview: newPhotoPreview
+          };
+        }
+        return prev;
       });
     }
   }, [user]);
 
-  const handleProfileChange = (e) => {
+  const handleProfileChange = useCallback((e) => {
     const { name, value, files } = e.target;
 
     if (files && files[0]) {
@@ -90,23 +112,23 @@ const Biography = () => {
         [name]: value
       }));
     }
-  };
+  }, []);
 
-  const handleSkillsChange = (e) => {
+  const handleSkillsChange = useCallback((e) => {
     const value = e.target.value;
     setProfileData(prev => ({
       ...prev,
       skills: value.split(',').map(skill => skill.trim()).filter(skill => skill !== '')
     }));
-  };
+  }, []);
 
-  const handlePasswordChange = (e) => {
+  const handlePasswordChange = useCallback((e) => {
     const { name, value } = e.target;
     setPasswordData(prev => ({
       ...prev,
       [name]: value
     }));
-  };
+  }, []);
 
   const updateProfile = async () => {
     try {
@@ -147,20 +169,82 @@ const Biography = () => {
         }
       });
 
-      const response = await api.put('/auth/profile', updateData);
+      console.log('🔄 Profile Update Debug:');
+      console.log('User data:', user);
+      console.log('Profile data:', profileData);
+      console.log('Update data:', updateData);
+      console.log('Is updateData empty?', Object.keys(updateData).length === 0);
 
-      if (response.data.success) {
-        // Update local auth context
-        updateUser(response.data.user);
-        setMessage({ type: 'success', text: 'Profile updated successfully!' });
+      // Don't make API call if no changes
+      if (Object.keys(updateData).length === 0) {
+        setMessage({ type: 'info', text: 'No changes to save.' });
         setIsEditing(false);
+        return;
+      }
+
+      // Check if user is authenticated
+      if (!user || !user._id) {
+        setMessage({ type: 'error', text: 'Please log in to update your profile.' });
+        return;
+      }
+
+      const response = await api.put('/auth/profile', updateData);
+      console.log('🔄 API Response:', response);
+      console.log('🔄 Response Data:', response.data);
+      console.log('🔄 Response Status:', response.status);
+
+      if (response.data.success && response.data.data) {
+        // Update local auth context
+        updateUser(response.data.data);
+
+        // Show appropriate message based on demo mode
+        const isDemo = response.data.demo;
+        setMessage({
+          type: 'success',
+          text: isDemo
+            ? 'Profile updated in demo mode (changes not saved to database)'
+            : 'Profile updated successfully!'
+        });
+
+        // Update local form data to reflect changes without full re-initialization
+        setProfileData(prev => ({
+          ...prev,
+          ...response.data.data,
+          photo: null, // Reset photo field since we don't need it anymore
+          photoPreview: response.data.data.photo ? `http://localhost:5000${response.data.data.photo}` : prev.photoPreview
+        }));
+
+        // Show success message for 2 seconds before exiting edit mode
+        setTimeout(() => {
+          setIsEditing(false);
+        }, 2000);
+      } else {
+        console.error('❌ API Response failed validation:', {
+          success: response.data.success,
+          hasUser: !!response.data.data,
+          responseData: response.data
+        });
+        setMessage({ type: 'error', text: 'Failed to update profile. Please try again.' });
       }
     } catch (error) {
-      console.error('Profile update error:', error);
-      setMessage({
-        type: 'error',
-        text: error.response?.data?.message || 'Failed to update profile. Please try again.'
-      });
+      console.error('❌ Profile Update Error Details:');
+      console.error('Error message:', error.message);
+      console.error('Error response:', error.response);
+      console.error('Error status:', error.response?.status);
+      console.error('Error data:', error.response?.data);
+
+      if (error.response?.status === 401) {
+        setMessage({ type: 'error', text: 'Authentication failed. Please log in again.' });
+        // Optionally redirect to login
+        // window.location.href = '/login';
+      } else if (error.response?.status === 503) {
+        setMessage({ type: 'error', text: 'Database unavailable. Please try again later.' });
+      } else {
+        setMessage({
+          type: 'error',
+          text: error.response?.data?.message || 'Failed to update profile. Please try again.'
+        });
+      }
     } finally {
       setIsLoading(false);
     }
@@ -187,7 +271,14 @@ const Biography = () => {
       });
 
       if (response.data.success) {
-        setMessage({ type: 'success', text: 'Password changed successfully!' });
+        // Show appropriate message based on demo mode
+        const isDemo = response.data.demo;
+        setMessage({
+          type: 'success',
+          text: isDemo
+            ? 'Password changed in demo mode (not actually saved)'
+            : 'Password changed successfully!'
+        });
         setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
         setIsChangingPassword(false);
       }
@@ -202,9 +293,13 @@ const Biography = () => {
     }
   };
 
-  const cancelEdit = () => {
-    // Reset form data to original user data
-    if (user) {
+  const cancelEdit = useCallback(() => {
+    // Reset form data to original user data only if currently editing
+    if (isEditing && user && typeof user === 'object') {
+      const newPhotoPreview = user.photo
+        ? (user.photo.startsWith('http') ? user.photo : `http://localhost:5000${user.photo}`)
+        : null;
+
       setProfileData({
         firstName: user.firstName || '',
         lastName: user.lastName || '',
@@ -216,16 +311,17 @@ const Biography = () => {
         bio: user.bio || '',
         skills: Array.isArray(user.skills) ? user.skills : [],
         photo: null,
-        photoPreview: user.photo ? `http://localhost:5000${user.photo}` : null
+        photoPreview: newPhotoPreview
       });
     }
     setIsEditing(false);
     setMessage({ type: '', text: '' });
-  };
+  }, [isEditing, user]);
 
-  const displayName = user ?
-    `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'User' :
-    'User';
+  const displayName = useMemo(() =>
+    user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'User' : 'User',
+    [user?.firstName, user?.lastName]
+  );
 
   if (!user) {
     return (
@@ -280,8 +376,8 @@ const Biography = () => {
               ) : (
                 <img
                   src={
-                    user.photo
-                      ? `http://localhost:5000${user.photo}`
+                    user?.photo
+                      ? (user.photo.startsWith('http') ? user.photo : `http://localhost:5000${user.photo}`)
                       : 'https://randomuser.me/api/portraits/lego/1.jpg'
                   }
                   alt={displayName}
@@ -310,9 +406,9 @@ const Biography = () => {
             </div>
             <div className="text-center md:text-left">
               <h2 className="text-2xl font-bold text-gray-900">{displayName || 'User'}</h2>
-              <p className="text-gray-600">{user.role || 'User'}</p>
+              <p className="text-gray-600">{user?.role || 'User'}</p>
               <p className="text-sm text-gray-500">
-                Member since {new Date(user.createdAt || Date.now()).toLocaleDateString()}
+                Member since {user?.createdAt ? new Date(user.createdAt).toLocaleDateString() : new Date().toLocaleDateString()}
               </p>
             </div>
           </div>
@@ -455,10 +551,10 @@ const Biography = () => {
                   <FiMail className="mr-3 text-gray-400" />
                   <div>
                     <p className="text-sm text-gray-500">Email</p>
-                    <p className="font-medium">{user.email || 'Not provided'}</p>
+                    <p className="font-medium">{user?.email || 'Not provided'}</p>
                   </div>
                 </div>
-                {user.phone && (
+                {user?.phone && (
                   <div className="flex items-center">
                     <FiPhone className="mr-3 text-gray-400" />
                     <div>
@@ -467,7 +563,7 @@ const Biography = () => {
                     </div>
                   </div>
                 )}
-                {user.location && (
+                {user?.location && (
                   <div className="flex items-center">
                     <FiMapPin className="mr-3 text-gray-400" />
                     <div>
@@ -476,7 +572,7 @@ const Biography = () => {
                     </div>
                   </div>
                 )}
-                {user.jobTitle && (
+                {user?.jobTitle && (
                   <div className="flex items-center">
                     <FiBriefcase className="mr-3 text-gray-400" />
                     <div>
@@ -485,7 +581,7 @@ const Biography = () => {
                     </div>
                   </div>
                 )}
-                {user.company && (
+                {user?.company && (
                   <div className="flex items-center">
                     <FiBriefcase className="mr-3 text-gray-400" />
                     <div>
@@ -496,14 +592,14 @@ const Biography = () => {
                 )}
               </div>
 
-              {user.bio && (
+              {user?.bio && (
                 <div>
                   <h3 className="text-lg font-semibold mb-2">About</h3>
                   <p className="text-gray-700">{user.bio}</p>
                 </div>
               )}
 
-              {user.skills && user.skills.length > 0 && (
+              {user?.skills && user.skills.length > 0 && (
                 <div>
                   <h3 className="text-lg font-semibold mb-2">Skills</h3>
                   <div className="flex flex-wrap gap-2">
@@ -622,4 +718,4 @@ const Biography = () => {
   );
 };
 
-export default Biography;
+export default React.memo(Biography);

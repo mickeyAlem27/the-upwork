@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useContext, useMemo, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { FiSend, FiBell, FiBellOff } from 'react-icons/fi';
 import SocketContext from '../context/SocketContext';
 import NotificationCenter from './NotificationCenter';
 import api, { apiMethods } from '../services/api';
 
 const Messages = () => {
+  const navigate = useNavigate();
   const { socket, isConnected, isUserOnline } = useContext(SocketContext);
   const [currentUser, setCurrentUser] = useState(null);
   const [users, setUsers] = useState([]);
@@ -152,30 +154,12 @@ const Messages = () => {
   useEffect(() => {
     if (!socket) return;
 
-    const handleUserStatusUpdate = (data) => {
-      try {
-        if (data.userId && data.online !== undefined) {
-          setUsers(prevUsers =>
-            prevUsers.map(user =>
-              user._id === data.userId
-                ? { ...user, online: data.online }
-                : user
-            )
-          );
-        }
-      } catch (error) {
-        console.error('Error updating user status:', error);
-      }
-    };
-
-    socket.on('user_status_update', handleUserStatusUpdate);
-
+    // Removed redundant user status handling since SocketContext already manages this
+    // The isUserOnline function from SocketContext provides real-time user status
     return () => {
-      if (socket) {
-        socket.off('user_status_update', handleUserStatusUpdate);
-      }
+      // Cleanup not needed since we're not attaching any listeners
     };
-  }, [socket, currentUser, setUsers]);
+  }, [socket]);
 
   // Filter users based on search term and real-time online status (memoized for performance)
   // Exclude current user from the list since users can't message themselves
@@ -573,53 +557,53 @@ const Messages = () => {
     socket.on('message_notification', handleMessageNotification);
 
     // Listen for real-time missed message count updates (for offline users)
-const handleMissedMessageCountUpdate = (data) => {
-  try {
-    // Only process updates for the current logged-in user
-    if (data.userId && data.userId === currentUser._id && data.missedMessageCount !== undefined) {
-      console.log(
-        '📬 GLOBAL: Received missed message count update for CURRENT USER:',
-        data.userId,
-        'count:',
-        data.missedMessageCount
-      );
+    const handleMissedMessageCountUpdate = (data) => {
+      try {
+        // Only process updates for the current logged-in user
+        if (data.userId && data.userId === currentUser._id && data.missedMessageCount !== undefined) {
+          console.log(
+            '📬 GLOBAL: Received missed message count update for CURRENT USER:',
+            data.userId,
+            'count:',
+            data.missedMessageCount
+          );
 
-      // Only update if this is a legitimate server update (not a duplicate of our own processing)
-      if (data.source === 'server' || !data.source) {
-        setUnreadCounts((prev) => {
-          const newCounts = new Map(prev);
+          // Only update if this is a legitimate server update (not a duplicate of our own processing)
+          if (data.source === 'server' || !data.source) {
+            setUnreadCounts((prev) => {
+              const newCounts = new Map(prev);
 
-          // If detailed conversation counts are provided, use them
-          if (data.conversationCounts && typeof data.conversationCounts === 'object') {
-            // Update counts for each conversation
-            for (const [conversationId, count] of Object.entries(data.conversationCounts)) {
-              if (count > 0) {
-                newCounts.set(conversationId, count);
-                console.log(
-                  `📬 SERVER: Set unread count for conversation ${conversationId} to ${count}`
-                );
-              } else {
-                newCounts.delete(conversationId);
-                console.log(
-                  `📬 SERVER: Cleared unread count for conversation ${conversationId}`
-                );
+              // If detailed conversation counts are provided, use them
+              if (data.conversationCounts && typeof data.conversationCounts === 'object') {
+                // Update counts for each conversation
+                for (const [conversationId, count] of Object.entries(data.conversationCounts)) {
+                  if (count > 0) {
+                    newCounts.set(conversationId, count);
+                    console.log(
+                      `📬 SERVER: Set unread count for conversation ${conversationId} to ${count}`
+                    );
+                  } else {
+                    newCounts.delete(conversationId);
+                    console.log(
+                      `📬 SERVER: Cleared unread count for conversation ${conversationId}`
+                    );
+                  }
+                }
               }
-            }
-          }
 
-          saveUnreadCountsToStorage(newCounts);
-          return newCounts;
-        });
-      } else {
-        console.log('📬 CLIENT: Ignoring client-side update (already processed)');
+              saveUnreadCountsToStorage(newCounts);
+              return newCounts;
+            });
+          } else {
+            console.log('📬 CLIENT: Ignoring client-side update (already processed)');
+          }
+        } else if (data.userId && data.userId !== currentUser._id) {
+          console.log('📬 GLOBAL: Ignoring missed message update for OTHER user:', data.userId);
+        }
+      } catch (error) {
+        console.error('Error updating missed message count:', error);
       }
-    } else if (data.userId && data.userId !== currentUser._id) {
-      console.log('📬 GLOBAL: Ignoring missed message update for OTHER user:', data.userId);
-    }
-  } catch (error) {
-    console.error('Error updating missed message count:', error);
-  }
-};
+    };
 
 
     socket.on('missed_message_count_updated', handleMissedMessageCountUpdate);
@@ -1605,10 +1589,10 @@ const handleMissedMessageCountUpdate = (data) => {
                 {/* Action Buttons */}
                 <div className="space-y-2 pt-4">
                   <button
-                    onClick={() => window.open(`http://localhost:5173/profile/${selectedUser._id}`, '_blank')}
+                    onClick={() => navigate(`/portfolio/${selectedUser._id}`)}
                     className="w-full px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
                   >
-                    See All Profile
+                    View Portfolio
                   </button>
                   <button
                     onClick={() => setShowUserProfile(false)}

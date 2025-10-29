@@ -26,10 +26,17 @@ export const AuthProvider = ({ children }) => {
 
           const response = await Promise.race([authPromise, timeoutPromise]);
           console.log('AuthContext: getMe response:', response);
-          if (response.data) {
+          if (response.data && response.data.data) {
             console.log('AuthContext: Setting user and authenticated to true');
-            setUser(response.data);
+            setUser(response.data.data);
             setIsAuthenticated(true);
+          } else if (response.data) {
+            // Handle different response formats
+            const userData = response.data.user || response.data;
+            if (userData && typeof userData === 'object') {
+              setUser(userData);
+              setIsAuthenticated(true);
+            }
           } else {
             console.log('AuthContext: No user data in response');
           }
@@ -81,7 +88,15 @@ export const AuthProvider = ({ children }) => {
           const userPromise = authAPI.getMe();
           const userResponse = await Promise.race([userPromise, userTimeoutPromise]);
 
-          setUser(userResponse.data);
+          if (userResponse.data) {
+            const userData = userResponse.data.data || userResponse.data.user || userResponse.data;
+            if (userData && typeof userData === 'object') {
+              setUser(userData);
+              setIsAuthenticated(true);
+              return { success: true };
+            }
+          }
+          // Still consider login successful if we got a token but no user data
           setIsAuthenticated(true);
           return { success: true };
         } catch (userError) {
@@ -146,7 +161,11 @@ export const AuthProvider = ({ children }) => {
 
   // Update user function
   const updateUser = useCallback((updatedUser) => {
-    setUser(updatedUser);
+    if (updatedUser && typeof updatedUser === 'object') {
+      setUser(updatedUser);
+    } else {
+      console.warn('updateUser called with invalid user data:', updatedUser);
+    }
   }, []);
 
   return (

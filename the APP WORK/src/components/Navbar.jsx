@@ -24,6 +24,7 @@ function Navbar() {
     { name: 'Jobs', path: '/jobs', icon: <FiBriefcase className="mr-2" />, roles: ['user', 'admin', 'promoter', 'brand'] },
     { name: 'My Jobs', path: '/my-jobs', icon: <FiBriefcase className="mr-2" />, roles: ['promoter', 'brand'] },
     { name: 'Messages', path: '/messages', icon: <FiMessageSquare className="mr-2" />, roles: ['user', 'admin', 'promoter', 'brand'] },
+    { name: 'Profile', path: '/biography', icon: <FiUser className="mr-2" />, roles: ['user', 'admin', 'promoter', 'brand'] },
   ];
 
   const promoterBrandLinks = [];
@@ -114,7 +115,7 @@ function Navbar() {
             <div className="md:hidden flex items-center space-x-2">
               {isAuthenticated && !isAuthPage && (
                 <Link
-                  to="/profile/me"
+                  to="/biography"
                   className="w-8 h-8 rounded-full bg-cyan-600 flex items-center justify-center text-white font-semibold text-sm"
                 >
                   {user?.firstName?.charAt(0) || 'U'}
