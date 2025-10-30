@@ -154,12 +154,30 @@ const Messages = () => {
   useEffect(() => {
     if (!socket) return;
 
-    // Removed redundant user status handling since SocketContext already manages this
-    // The isUserOnline function from SocketContext provides real-time user status
-    return () => {
-      // Cleanup not needed since we're not attaching any listeners
+    const handleUserStatusUpdate = (data) => {
+      try {
+        if (data.userId && data.online !== undefined) {
+          setUsers(prevUsers =>
+            prevUsers.map(user =>
+              user._id === data.userId
+                ? { ...user, online: data.online }
+                : user
+            )
+          );
+        }
+      } catch (error) {
+        console.error('Error updating user status:', error);
+      }
     };
-  }, [socket]);
+
+    socket.on('user_status_update', handleUserStatusUpdate);
+
+    return () => {
+      if (socket) {
+        socket.off('user_status_update', handleUserStatusUpdate);
+      }
+    };
+  }, [socket, currentUser, setUsers]);
 
   // Filter users based on search term and real-time online status (memoized for performance)
   // Exclude current user from the list since users can't message themselves

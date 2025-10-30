@@ -49,8 +49,16 @@ exports.protect = async (req, res, next) => {
 
     // Check if MongoDB is connected before querying User model
     if (mongoose.connection.readyState !== 1) {
-      console.warn('⚠️ MongoDB not connected, cannot verify user for protected route');
-      return next(new ErrorResponse('Database not available', 503));
+      console.warn('⚠️ MongoDB not connected, using demo mode for user verification');
+      // Create demo user object from decoded token
+      req.user = {
+        id: decoded.id,
+        firstName: 'Demo',
+        lastName: 'User',
+        email: decoded.email || 'demo@example.com',
+        role: 'user'
+      };
+      return next();
     }
 
     req.user = await User.findById(decoded.id);

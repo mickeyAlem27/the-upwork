@@ -1,18 +1,15 @@
 const express = require('express');
 const router = express.Router();
-// const { protect } = require('../middleware/auth'); // Temporarily disabled for debugging
+const { protect } = require('../middleware/auth');
 const { getUsers, searchUsers, getUserById } = require('../controllers/userController');
 
-// Public route - Get all users (for messaging interface)
-// router.use(protect); // Temporarily disabled for debugging
+// Get all users (except current user) - needs protection
+router.get('/', protect, getUsers);
 
-// Get all users (except current user)
-router.get('/', getUsers);
+// Search users by name or role - needs protection
+router.get('/search', protect, searchUsers);
 
-// Search users by name or role
-router.get('/search', searchUsers);
-
-// Get single user by id
-router.get('/:userId', getUserById);
+// Get single user by id - needs protection
+router.get('/:userId', protect, getUserById);
 
 module.exports = router;

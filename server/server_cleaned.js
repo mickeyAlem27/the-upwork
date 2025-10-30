@@ -221,22 +221,6 @@ const setupSocketIO = (server) => {
     // Broadcast user online status
     socket.broadcast.emit('user_online', { userId: socket.userId });
 
-    // Send current online users to this newly connected user
-    const currentUsers = Array.from(connectedUsers.keys()).filter(id => id !== socket.userId);
-    if (currentUsers.length > 0) {
-      currentUsers.forEach(userId => {
-        const userConnections = connectedUsers.get(userId);
-        if (userConnections && userConnections.size > 0) {
-          socket.emit('user_online', {
-            userId,
-            timestamp: new Date(),
-            isDemo: false,
-            isExisting: true
-          });
-        }
-      });
-    }
-
     // Send missed messages if any
     const userMissedMessages = missedMessages.get(socket.userId);
     if (userMissedMessages) {
